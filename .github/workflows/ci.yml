@@ -48,10 +48,7 @@ jobs:
 
       - name: Run database migrations
         run: npx prisma migrate deploy --schema=./src/prisma/schema.prisma
-git add .github/workflows/ci.yml
-git commit -m "Fix workflow YAML indentation"
-git push
-
+        
       - name: Lint
         run: npx nx lint api
         continue-on-error: true
