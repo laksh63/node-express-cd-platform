@@ -4,15 +4,17 @@
 # Tip: Modify "docker-build" options in project.json to change docker build args.
 #
 # Run the container with `docker run -p 3000:3000 -t api`.
-FROM docker.io/node:lts-alpine
+FROM docker.io/node:20-slim
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 
 ENV HOST=0.0.0.0
 ENV PORT=3000
 
 WORKDIR /app
 
-RUN addgroup --system api && \
-          adduser --system -G api api
+RUN groupadd --system api && \
+        useradd --system --gid api api
+
 
 COPY dist/api api
 RUN chown -R api:api .
@@ -20,5 +22,11 @@ RUN chown -R api:api .
 # You can remove this install step if you build with `--bundle` option.
 # The bundled output will include external dependencies.
 RUN npm --prefix api --omit=dev -f install
+COPY src/prisma ./api/src/prisma
+RUN cd api && npm install prisma@4.16.2 --no-save
+RUN cd api && ./node_modules/.bin/prisma generate --schema=./src/prisma/schema.prisma
+
+
+
 
 CMD [ "node", "api" ]
