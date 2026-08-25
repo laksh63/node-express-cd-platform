@@ -32,15 +32,10 @@ spec:
           image: postgres:16-alpine
           ports:
             - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgres-credentials
           env:
-            - name: POSTGRES_USER
-              value: admin
-            - name: POSTGRES_PASSWORD
-              value: password123
-            - name: POSTGRES_DB
-              value: conduit
-            # Postgres refuses to init into a non-empty mount root, so the
-            # actual data directory sits one level below the mount point.
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           volumeMounts:
