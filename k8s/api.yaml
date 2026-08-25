@@ -19,11 +19,9 @@ spec:
           image: ghcr.io/laksh63/node-express-cd-platform:b2bf93b8df88e1e254bb921aaacb355b2ad42ef5
           ports:
             - containerPort: 3000
-          env:
-            - name: DATABASE_URL
-              value: postgresql://admin:password123@postgres:5432/conduit?schema=public
-            - name: JWT_SECRET
-              value: local-dev-secret
+          envFrom:
+            - secretRef:
+                name: api-credentials
 ---
 apiVersion: v1
 kind: Service

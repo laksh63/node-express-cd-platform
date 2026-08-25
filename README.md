@@ -18,11 +18,13 @@ Six of the eight requirements:
 Not covered, deliberately:
 
 - **AWS managed services.** Running on EKS/RDS would have spent the time budget on cloud setup rather than pipeline design. This uses [kind](https://kind.sigs.k8s.io/) — same Kubernetes API, same manifests, no cost.
-- **Backups.** Postgres has no persistent volume here, so there's nothing durable to back up. Both are in the gaps list.
+- **Backups.** Postgres has PVC here and a cron job that runs daily to back this up is created. 
 
 ## Stack
 
 ![Architecture](Docs/Architecture.png)
+
+Note: Postgres is changed to sts after the diagram was created. 
 
 Node 20, TypeScript, Express, Prisma 4, PostgreSQL 16, Nx. Docker on `node:20-slim`. Kubernetes via kind. GitHub Actions, GHCR, Argo CD. Prometheus, Grafana, Loki.
 
@@ -135,15 +137,13 @@ Terraform resolves provider config at plan time. One config that both creates a 
 2. **Credentials in plaintext** in `k8s/api.yaml` and `k8s/postgres.yaml`, committed. Should be Secrets, ideally from a secret manager via External Secrets Operator.
 3. **The two cluster secrets are created imperatively**, outside Terraform, so the PAT stays out of state. Correct for now, but it means a rebuild has manual steps.
 4. **Migrations are manual.** If a pod restarts against a fresh database nothing tells you the schema is missing. Should be a Job as a pre-sync hook. I hit this myself rebuilding the cluster — forgot the exact command and lost ten minutes.
-5. **No persistent storage.** Postgres uses the pod filesystem. Deleting the pod destroys the database. Needs a StatefulSet with a PVC.
-6. **No backups** — follows from 5.
-7. **Containers run as root.** The upstream Dockerfile creates an `api` user and never switches to it. No `USER` line, no read-only root filesystem, no dropped capabilities.
-8. **No resource requests or limits**, no HPA, no PodDisruptionBudget.
-9. **No NetworkPolicies.** Tiers are separated logically but the network is flat. Right now the boundary is a diagram, not a control.
-10. **Terraform state is local.** No remote backend, no locking.
-11. **`tehcyx/kind` is a community provider.** No official one exists. Fine locally; a real config would use the AWS provider here.
-12. **Loki has no persistence.** Logs are in-memory and don't survive a restart.
-13. **No alerting.** Metrics are collected and graphed but no alerts setup. SLOs with burn-rate alerts would be next.
+5. **Containers run as root.** The upstream Dockerfile creates an `api` user and never switches to it. No `USER` line, no read-only root filesystem, no dropped capabilities.
+6. **No resource requests or limits**, no HPA, no PodDisruptionBudget.
+7. **No NetworkPolicies.** Tiers are separated logically but the network is flat. Right now the boundary is a diagram, not a control.
+8. **Terraform state is local.** No remote backend, no locking.
+9. **`tehcyx/kind` is a community provider.** No official one exists. Fine locally; a real config would use the AWS provider here.
+10. **Loki has no persistence.** Logs are in-memory and don't survive a restart.
+11. **No alerting.** Metrics are collected and graphed but no alerts setup. SLOs with burn-rate alerts would be next.
 
 ---
 
