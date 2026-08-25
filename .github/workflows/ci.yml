@@ -94,3 +94,41 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+  update-manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    # Only on merges to the default branch, never on PRs.
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Use a token that can push back to the repo.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pin manifest to the image just built
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          # Replace whatever tag is currently referenced with this commit's SHA.
+          sed -i -E "s|image: ghcr.io/[^:]+:.*|image: ${IMAGE}|g" k8s/api.yaml
+          echo "Pinned to ${IMAGE}"
+          grep -n "image:" k8s/api.yaml
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet k8s/api.yaml; then
+            echo "Manifest already current, nothing to commit."
+            exit 0
+          fi
+
+          git add k8s/api.yaml
+          # [skip ci] prevents this commit from re-triggering the workflow.
+          git commit -m "Deploy ${GITHUB_SHA::7} [skip ci]"
+          git push

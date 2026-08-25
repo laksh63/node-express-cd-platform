@@ -107,3 +107,31 @@ resource "helm_release" "loki" {
 output "grafana_port_forward" {
   value = "kubectl port-forward -n monitoring svc/monitoring-grafana 3002:80"
 }
+
+resource "kubernetes_namespace" "argocd" {
+  metadata {
+    name = "argocd"
+  }
+}
+
+resource "helm_release" "argocd" {
+  name       = "argocd"
+  repository = "https://argoproj.github.io/argo-helm"
+  chart      = "argo-cd"
+  version    = "7.7.11"
+  namespace  = kubernetes_namespace.argocd.metadata[0].name
+
+  timeout = 900
+  wait    = true
+
+  values = [yamlencode({
+    # Single-node local cluster: no need for HA replicas.
+    redis-ha = { enabled = false }
+    controller = { replicas = 1 }
+    server = {
+      # kind has no load balancer; reach the UI via port-forward.
+      service = { type = "ClusterIP" }
+      extraArgs = ["--insecure"]
+    }
+  })]
+}
