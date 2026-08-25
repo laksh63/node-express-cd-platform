@@ -16,7 +16,7 @@ spec:
         - name: ghcr-pull
       containers:
         - name: api
-          image: ghcr.io/laksh63/node-express-cd-platform:39339703ea35fb35aa93c41f4e3a7e700dce6412
+          image: ghcr.io/laksh63/node-express-cd-platform:3d35177a559e91b13587d479b7fbe2fe4c5826e9
           ports:
             - containerPort: 3000
           env:
