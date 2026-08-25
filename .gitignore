@@ -40,3 +40,10 @@ testem.log
 Thumbs.db
 
 .nx/cache
+
+#Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform/*/conduit-config
+
