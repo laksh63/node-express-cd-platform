@@ -12,10 +12,11 @@ spec:
       labels:
         app: api
     spec:
+      imagePullSecrets:
+        - name: ghcr-pull
       containers:
         - name: api
-          image: conduit-api
-          imagePullPolicy: Never
+          image: ghcr.io/laksh63/node-express-cd-platform:latest
           ports:
             - containerPort: 3000
           env:
