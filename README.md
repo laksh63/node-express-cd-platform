@@ -22,7 +22,7 @@ Not covered, deliberately:
 
 ## Stack
 
-![Architecture](docs/Architecture.png)
+![Architecture](Docs/Architecture.png)
 
 Node 20, TypeScript, Express, Prisma 4, PostgreSQL 16, Nx. Docker on `node:20-slim`. Kubernetes via kind. GitHub Actions, GHCR, Argo CD. Prometheus, Grafana, Loki.
 
