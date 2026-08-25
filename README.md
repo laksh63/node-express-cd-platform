@@ -22,6 +22,8 @@ Not covered, deliberately:
 
 ## Stack
 
+![Architecture](docs/Architecture.png)
+
 Node 20, TypeScript, Express, Prisma 4, PostgreSQL 16, Nx. Docker on `node:20-slim`. Kubernetes via kind. GitHub Actions, GHCR, Argo CD. Prometheus, Grafana, Loki.
 
 ## Layout
@@ -142,6 +144,7 @@ Terraform resolves provider config at plan time. One config that both creates a 
 11. **`tehcyx/kind` is a community provider.** No official one exists. Fine locally; a real config would use the AWS provider here.
 12. **Loki has no persistence.** Logs are in-memory and don't survive a restart.
 13. **No alerting.** Metrics are collected and graphed but no alerts setup. SLOs with burn-rate alerts would be next.
+
 ---
 
 Forked from [gothinkster/node-express-realworld-example-app](https://github.com/gothinkster/node-express-realworld-example-app). Original README preserved at [`docs/UPSTREAM_README.md`](docs/UPSTREAM_README.md).
