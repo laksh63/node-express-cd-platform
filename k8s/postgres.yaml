@@ -1,8 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  # Headless — StatefulSet pods need stable DNS names, not a load-balanced VIP.
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: postgres
 spec:
+  serviceName: postgres
   replicas: 1
   selector:
     matchLabels:
@@ -24,13 +39,22 @@ spec:
               value: password123
             - name: POSTGRES_DB
               value: conduit
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: postgres
-spec:
-  selector:
-    app: postgres
-  ports:
-    - port: 5432
+            # Postgres refuses to init into a non-empty mount root, so the
+            # actual data directory sits one level below the mount point.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "admin"]
+            periodSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
