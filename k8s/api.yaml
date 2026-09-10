@@ -12,11 +12,9 @@ spec:
       labels:
         app: api
     spec:
-      imagePullSecrets:
-        - name: ghcr-pull
       containers:
         - name: api
-          image: ghcr.io/laksh63/node-express-cd-platform:6f7b09f9cc6c270fbae2d261279a2150f8d297c2
+          image: 719129114745.dkr.ecr.us-east-1.amazonaws.com/conduit:latest
           ports:
             - containerPort: 3000
           envFrom:
@@ -30,6 +28,7 @@ metadata:
   labels:
     app: api
 spec:
+  type: LoadBalancer
   selector:
     app: api
   ports:
