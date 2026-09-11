@@ -43,16 +43,16 @@ src/app/metrics.ts      prom-client instrumentation
 
 ## Running it
 
-Each layer has its own state and reads the previous one's outputs via `terraform_remote_state`:
+Each layer has its own state and reads the previous one's outputs via `terraform_remote_state`. `06-platform` reads the Argo CD PAT from Secrets Manager, so it can't run until that secret has a value — apply `00` through `05` first:
 
 ```bash
 export AWS_PROFILE=<your-profile>
-for layer in 00-backend 01-network 02-cluster 03-database 04-secrets 05-registry 06-platform; do
+for layer in 00-backend 01-network 02-cluster 03-database 04-secrets 05-registry; do
   (cd terraform/$layer && terraform init && terraform apply)
 done
 ```
 
-One value needs a human — seeded straight into Secrets Manager:
+`04-secrets` only creates the container for the Argo CD PAT, not a value — one thing nothing can generate on its own, seeded straight into Secrets Manager:
 
 ```bash
 aws secretsmanager put-secret-value \
@@ -60,7 +60,11 @@ aws secretsmanager put-secret-value \
   --secret-string '{"username":"laksh63","password":"YOUR_GITHUB_PAT"}'
 ```
 
-The JWT secret and the RDS password are both generated automatically — no manual step for either.
+The JWT secret and the RDS password are both generated automatically — no manual step for either. Now `06-platform` can apply:
+
+```bash
+cd terraform/06-platform && terraform init && terraform apply
+```
 
 Hand Argo the Application and it takes over:
 
