@@ -1,81 +1,73 @@
 # RealWorld CI/CD Platform
 
-A continuous delivery platform for the [RealWorld](https://github.com/gothinkster/realworld) API. Terraform provisions the cluster and platform, GitHub Actions builds and tests, Argo CD deploys, Prometheus and Loki watch it.
+A continuous delivery platform for the [RealWorld](https://github.com/gothinkster/realworld) API, running on AWS EKS. Terraform provisions the VPC, cluster, database, and platform; GitHub Actions builds and tests; Argo CD deploys; Prometheus, Grafana, and Loki watch it.
 
-The app itself is the upstream Node/Express + Prisma implementation. I only changed it where the platform I was building had a need — a metrics endpoint, a health check, and the Dockerfile. Everything else here is the platform.
+The app itself is the upstream Node/Express + Prisma implementation. I only touched it where the platform needed something — a metrics endpoint, a health check, the Dockerfile. Everything else here is the platform.
 
 ## What's covered
 
-Seven of the eight requirements:
+All eight requirements:
 
-- Tiered architecture — separate app and data tiers
-- Containerization — Docker, deployed to Kubernetes( I picked Kind cluster)
-- Infrastructure as Code — Terraform provisions cluster and platform
-- CI/CD — GitHub Actions builds, Argo CD deploys, merge to master ships
-- Observability — Prometheus + Grafana
-- Centralized logging — Loki + Promtail
-- Backups — Postgres runs on a PVC (StatefulSet), a CronJob runs `pg_dump` daily and keeps the last 7. Restore from one hasn't been tested end to end — see gaps.
+- **Tiered architecture** — app tier (EKS pods behind LoadBalancer Services), data tier (RDS, private subnets, reachable only from the EKS node security group).
+- **AWS managed services** — EKS, RDS, ECR, Secrets Manager, S3 + DynamoDB, CloudWatch.
+- **Infrastructure as Code** — Terraform, seven layers, each with its own remote state.
+- **Containerization** — Docker, deployed to EKS.
+- **CI/CD** — GitHub Actions builds/tests/pushes to ECR, Argo CD deploys, merge to master ships.
+- **Observability** — Prometheus + Grafana, plus EKS control-plane logs in CloudWatch.
+- **Centralized logging** — Loki + Promtail.
+- **Backups** — RDS automated backups, 7-day retention, point-in-time recovery. Restore itself is untested — see gaps.
 
-Not covered, deliberately:
-
-- **AWS managed services.** Running on EKS/RDS would have spent the time budget on cloud setup rather than pipeline design. This uses [kind](https://kind.sigs.k8s.io/) — same Kubernetes API, same manifests, no cost.
+Started on a local [kind](https://kind.sigs.k8s.io/) cluster before recieving the full details on submission, then moved to real AWS wasn't very time consuming since  — same manifests, same GitOps flow, different substrate.
 
 ## Stack
 
 ![Architecture](Docs/Architecture.png)
 
-Note: Postgres is changed to sts after the diagram was created.
-
-Node 20, TypeScript, Express, Prisma 4, PostgreSQL 16, Nx. Docker on `node:20-slim`. Kubernetes via kind. GitHub Actions, GHCR, Argo CD. Prometheus, Grafana, Loki.
+Node 20, TypeScript, Express, Prisma 4, PostgreSQL 16 (RDS), Nx. Docker on `node:20-slim`. EKS, ECR, Argo CD. Prometheus, Grafana, Loki. Secrets Manager + External Secrets Operator for credentials.
 
 ## Layout
 
 ```
-terraform/01-cluster    kind cluster
-terraform/02-platform   Prometheus, Grafana, Loki, Argo CD
-k8s/                    app manifests + Argo CD Application + backup CronJob
+terraform/00-backend    S3 + DynamoDB remote state
+terraform/01-network    default VPC + 2 private subnets + NAT gateway
+terraform/02-cluster    EKS, node group, EBS CSI driver via IRSA
+terraform/03-database   RDS, credentials in Secrets Manager
+terraform/04-secrets    JWT secret + Argo CD repo-credentials container
+terraform/05-registry   ECR repo + lifecycle policy, CI IAM user
+terraform/06-platform   Helm releases, External Secrets Operator, default StorageClass
+k8s/                    app manifests, Argo CD Application, ExternalSecret
 .github/workflows/      CI and the manifest update job
 src/app/metrics.ts      prom-client instrumentation
 ```
 
 ## Running it
 
-```bash
-# Cluster, then platform
-cd terraform/01-cluster && terraform init && terraform apply
-cd ../02-platform && terraform init && terraform apply
-```
-
-A few secrets are created by hand, deliberately, so nothing sensitive lands in Terraform state or a committed file:
+Each layer has its own state and reads the previous one's outputs via `terraform_remote_state`:
 
 ```bash
-# Lets Argo CD read the repo
-kubectl create secret generic repo-conduit -n argocd \
-  --from-literal=type=git \
-  --from-literal=url=https://github.com/laksh63/node-express-cd-platform \
-  --from-literal=username=laksh63 \
-  --from-literal=password=YOUR_PAT
-kubectl label secret repo-conduit -n argocd argocd.argoproj.io/secret-type=repository
-
-# Lets the cluster pull from GHCR
-kubectl create secret docker-registry ghcr-pull -n default \
-  --docker-server=ghcr.io --docker-username=laksh63 --docker-password=YOUR_PAT
-
-# App and database credentials — pick your own values, don't reuse these
-kubectl create secret generic postgres-credentials \
-  --from-literal=POSTGRES_USER=<db-user> \
-  --from-literal=POSTGRES_PASSWORD=<db-password> \
-  --from-literal=POSTGRES_DB=<db-name>
-kubectl create secret generic api-credentials \
-  --from-literal=DATABASE_URL="postgresql://<db-user>:<db-password>@postgres:5432/<db-name>?schema=public" \
-  --from-literal=JWT_SECRET="<jwt-secret>"
+export AWS_PROFILE=<your-profile>
+for layer in 00-backend 01-network 02-cluster 03-database 04-secrets 05-registry 06-platform; do
+  (cd terraform/$layer && terraform init && terraform apply)
+done
 ```
 
-Then hand Argo the Application and it takes over:
+One value needs a human — seeded straight into Secrets Manager:
+
+```bash
+aws secretsmanager put-secret-value \
+  --secret-id conduit/argocd-repo-credentials \
+  --secret-string '{"username":"laksh63","password":"YOUR_GITHUB_PAT"}'
+```
+
+The JWT secret and the RDS password are both generated automatically — no manual step for either.
+
+Hand Argo the Application and it takes over:
 
 ```bash
 kubectl apply -f k8s/argocd-application.yaml
 ```
+
+`api-credentials` isn't created by hand anymore — an `ExternalSecret` (`k8s/external-secrets.yaml`) pulls it from Secrets Manager via External Secrets Operator, under an IRSA role scoped to just the RDS and JWT ARNs. `repo-conduit` is the one exception: Argo CD needs it before it can pull `k8s/` at all, so Terraform creates it directly, wrapped in `sensitive()` so it doesn't print in plan/apply output.
 
 Migrations are still manual:
 
@@ -87,82 +79,108 @@ kubectl exec deployment/api -- sh -c \
 Check it:
 
 ```bash
-kubectl port-forward service/api 8080:80 &
-curl localhost:8080/api/articles     # {"articles":[],"articlesCount":0}
-curl localhost:8080/metrics
+API_LB=$(kubectl get svc api -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+curl "http://$API_LB/api/articles"     # {"articles":[],"articlesCount":0}
+curl "http://$API_LB/metrics"
 ```
 
-Grafana on `kubectl port-forward -n monitoring svc/monitoring-grafana 3002:80`. Retrieve the admin password with:
+Grafana and Argo CD are real LoadBalancer Services now:
 
-`kubectl get secret -n monitoring monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 -d`
+```bash
+kubectl get svc -n monitoring monitoring-grafana
+kubectl get svc -n argocd argocd-server
+```
 
-Argo UI on `kubectl port-forward -n argocd svc/argocd-server 8081:80`.
+Grafana password: `kubectl get secret -n monitoring monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 -d`
 
-Teardown: `terraform destroy` in `02-platform`, then `01-cluster`. PVCs go with it — back up anything worth keeping first.
+Teardown, in reverse: `06-platform`, `05-registry`, `04-secrets`, `03-database`, `02-cluster`, `01-network`, then `00-backend` last — every other layer's state lives in the bucket it creates.
 
 ## How a deploy happens
 
-Merge to master, then:
+Merge to master:
 
 1. `test` — Postgres service container, migrate, lint, Jest
-2. `build` — compile, build image, push to GHCR tagged with the commit SHA
-3. `update-manifest` — rewrite `k8s/api.yaml` with that SHA and commit it back with `[skip ci]`
-4. Argo CD sees the new commit and syncs the cluster
+2. `build` — compile, build image, push to ECR tagged with the commit SHA
+3. `update-manifest` — rewrite `k8s/api.yaml` with that SHA, commit back `[skip ci]`
+4. Argo CD sees the commit and syncs
 
-CI never touches the cluster. It only writes to Git and argoCD pulls. `syncPolicy` has `prune` and `selfHeal` on, so Git is the only way to change the cluster. 
+CI never touches the cluster, only Git. `prune` + `selfHeal` are on, so Git is the only way to change the cluster. Argo CD polls on its own schedule though — right after a merge, `Synced` can briefly show the previous revision. `kubectl patch application conduit -n argocd --type merge -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}'` forces an immediate check.
 
-## Terraform is split in two
+## Seven Terraform layers
 
-Terraform resolves provider config at plan time. One config that both creates a cluster and configures the Helm provider from that cluster's credentials can't plan — the credentials don't exist yet. So: cluster first, platform second, separate state.
+A config that creates a cluster *and* configures the Helm provider from that cluster's credentials can't plan — the credentials don't exist yet. So it's split, each layer with its own S3 state, later layers reading earlier ones via `terraform_remote_state`:
+
+| Layer | Creates | Depends on |
+|---|---|---|
+| `00-backend` | S3 bucket, DynamoDB lock table | — |
+| `01-network` | 2 private subnets, NAT gateway | `00-backend` |
+| `02-cluster` | EKS, node group, EBS CSI IRSA role | `01-network` |
+| `03-database` | RDS, subnet group, security group | `01-network`, `02-cluster` |
+| `04-secrets` | JWT + Argo CD repo secrets | — |
+| `05-registry` | ECR repo, CI IAM user | — |
+| `06-platform` | Helm releases, ESO, `repo-conduit`, StorageClass | `02-cluster`, `03-database`, `04-secrets` |
+
+Splitting it this finely keeps blast radius small — a database change can't touch the network layer. The bucket name is a literal repeated in every `backend "s3" {}` block, unavoidably (Terraform resolves backend config before any variable exists). Everywhere else it's a `local`.
+
+## Networking
+
+EKS and RDS sit in the account's existing default VPC, not a new one — but its six subnets are all public. `01-network` adds two private subnets and one NAT gateway, and tags two existing public subnets for the LoadBalancer/EKS auto-discovery convention. EKS's public API endpoint stays open to the internet, no bastion or VPN — see gaps.
 
 ## Data tier
 
-Postgres runs as a StatefulSet with a `volumeClaimTemplates`- backed PVC. 
+Postgres is RDS: `db.t4g.micro`, single-AZ, encrypted, master password generated and rotated by RDS itself. Automated backups, 7-day retention, point-in-time recovery — replaces the old `pg_dump` CronJob outright.
 
-Verified by registering a user, deleted `postgres-0`, waited for the replacement, then tried to register the same user again. Got `"has already been taken"`
+Before RDS it ran as a StatefulSet on a PVC — verified by deleting `postgres-0`, waiting for the replacement, confirming `"has already been taken"` on the same registration. When it was cut over, the PVC didn't get pruned with the rest of the manifest — Kubernetes deliberately leaves `volumeClaimTemplate` PVCs behind on StatefulSet deletion — so it needed a manual `kubectl delete pvc`.
 
-Backups are a `CronJob` (`k8s/postgres-backup.yaml`) running `pg_dump | gzip` into a second PVC daily, keeping the most recent 7.
+## Secrets
+
+Three secrets, three lifecycles, none of them need manual `kubectl create secret`:
+
+- **RDS password** — RDS generates and owns it. Terraform never sees the value.
+- **JWT secret** — Terraform generates it (`random_password`), fully automated.
+- **Argo CD's GitHub PAT** — the one thing nothing can generate. Terraform creates the Secrets Manager container; the value is seeded once by hand.
+
+External Secrets Operator, IRSA-scoped to exactly the RDS and JWT ARNs, syncs the first two into `api-credentials`. `repo-conduit` is the exception — Argo CD needs it before it can pull `k8s/`, so it can't be GitOps-managed; Terraform creates it directly, and the PAT is wrapped in `sensitive()` before it reaches the resource, because the Kubernetes provider doesn't mark `kubernetes_secret`'s `data` field sensitive on its own — without that wrapper, a `terraform plan` could print it in plaintext.
 
 ## Things that bit me
 
-**Alpine and Prisma.** The upstream Dockerfile used `node:lts-alpine`. Prisma 4's query engine needs OpenSSL 1.1, which Alpine dropped. Container started fine, died on the first database query. Switched to Debian slim — bigger image, works.
+**ServiceMonitor selectors match Service labels, not selectors.** Four targets discovered, four dropped. `app: api` was under `spec.selector`, not on the Service's own metadata. Same key, different field.
 
-**npx grabbing the wrong version.** Production installs skip the Prisma CLI, so `npx prisma generate` inside the image downloaded Prisma 7, which rejected the Prisma 4 schema. Now pinned to 4.16.2 and called from `node_modules/.bin` directly. An unpinned fetch means the build isn't reproducible.
+**Branch protection vs. the deploy bot.** `update-manifest` pushes to master; the ruleset blocked it for not being a PR, then for having no passing check on a commit that didn't exist yet when the check ran. Relaxed the rule. Real fix is a separate config repo.
 
-**ServiceMonitor selectors match Service labels, not Service selectors.** Prometheus discovered four targets and dropped all four. The Service had `app: api` under `spec.selector` but no labels on its own metadata. Same key, different field. That one took a while.
+**ECR lifecycle policy rejected an empty tag prefix.** `tagPrefixList: ["sha", ""]` — ECR rejects the empty string. The tags are just raw SHAs and `latest`, no prefix scheme, so `tagStatus: "any"` was the right rule, not prefix matching.
 
-**Branch protection versus the deploy automation.** The `update-manifest` job pushes to master, and the ruleset blocked it — first for not being a PR, then for the commit having no `test` run against it. That second one is a genuine deadlock: a commit can't have a passing check before it exists. I ended up relaxing the status-check rule. The real fix is a separate config repo, which is why every serious GitOps setup has two. See gaps.
+**Argo CD doesn't sync on your schedule.** After merging AWS support, `Synced` still showed the old revision — its poll interval hadn't ticked. A hard-refresh annotation forces it.
 
-**A headless service's `clusterIP: None` is immutable.** Moving Postgres to a StatefulSet meant the service also had to go headless. `kubectl apply` tried to patch it in place and Kubernetes refused — that field can only be set at creation. Had to delete and recreate the service.
+**The default StorageClass wasn't wired to the CSI driver.** `gp2` on the legacy in-tree provisioner, not marked default, and the `aws-ebs-csi-driver` addon had nothing pointing at it. Caught in an audit pass, not by anything actually breaking — nothing had requested a PVC yet.
 
-**The metrics caught a real bug.** First thing they showed was a 500 on `/api/articles` I'd otherwise have missed.
+**`kubernetes_secret`'s `data` isn't sensitive by default.** Same audit pass. A value sourced carefully from Secrets Manager can still print in plaintext once it lands in that field, because the provider doesn't mark it. `sensitive()` fixes the CLI-output side of it.
 
 ## Other decisions
 
-**Lint doesn't block.** ~40 pre-existing `no-explicit-any` violations in upstream code. Fixing them isn't this exercise. It runs and reports.
+**Route labels use the matched pattern**, not the raw path, or every article slug becomes its own time series.
 
-**One test suite excluded.** `auth.service.test.ts` — its Prisma mocking doesn't isolate, so tests expecting a rejection get a resolved user from seeded data. Four suites still run and gate. Better to exclude one broken file than make the whole step non-blocking.
+**Prometheus over VictoriaMetrics.** kube-prometheus-stack gives the operator, exporters, and dashboards in one install. VictoriaMetrics is more efficient at scale — not the constraint here.
 
-**Route labels use the matched pattern**, not the raw path. Otherwise every article slug becomes its own time series and Prometheus falls over.
+**`GITHUB_TOKEN` where possible, a PAT only where necessary.** Argo CD runs inside the cluster, outside any workflow, so it needs something long-lived. Now in Secrets Manager instead of a k8s Secret, but still a PAT.
 
-**Prometheus over VictoriaMetrics.** kube-prometheus-stack gives the operator, exporters and dashboards in one install, and ServiceMonitor is the best-documented scrape pattern. VictoriaMetrics is more efficient and handles long-term retention natively — that matters at scale or if durable history were required. At two pods it isn't observable.
+**Reused the default VPC instead of a new one.** It's what the account had. Added only the two private subnets and one NAT gateway actually needed.
 
-**`GITHUB_TOKEN` where possible, a PAT only where necessary.** The workflow token is minted per run and expires with it. Argo CD and the kubelet run inside the cluster, outside any workflow, so they need a long-lived PAT. That's two more credentials to rotate than I'd like.
+**IAM access keys over OIDC for CI.** Simpler — one Terraform resource instead of an OIDC provider plus trust policy — for an account with one pipeline. OIDC is the better long-term answer.
 
 ## Gaps
 
-1. **Branch protection is weakened.** The status-check rule had to come off master so the deploy bot could push. Right fix: split manifests into a separate config repo, keep full protection on the app repo.
-2. **Kubernetes Secrets are base64, not encrypted at rest.** Credentials are out of Git, which was the bigger and cheaper win, but anyone with `kubectl get secret -o yaml` access to the cluster reads them trivially. Real fix is External Secrets Operator pulling from an actual secret manager.
-3. **The cluster secrets are created imperatively**, outside Terraform, so nothing sensitive stays in state. Correct for now, but it means a rebuild has manual steps.
-4. **Migrations are manual.** If a pod restarts against a fresh database nothing tells you the schema is missing. Should be a Job as a pre-sync hook. I hit this myself rebuilding the cluster — forgot the exact command and lost ten minutes.
-5. Backups exist; restoring from one is a manual `gunzip | psql`, untested end to end.
-6. **Containers run as root.** The upstream Dockerfile creates an `api` user and never switches to it. No `USER` line, no read-only root filesystem, no dropped capabilities.
-7. **No resource requests or limits**, no HPA, no PodDisruptionBudget.
-8. **No NetworkPolicies.** Tiers are separated logically but the network is flat. Right now the boundary is a diagram, not a control.
-9. **Terraform state is local.** No remote backend, no locking.
-10. **`tehcyx/kind` is a community provider.** No official one exists. Fine locally; a real config would use the AWS provider here.
-11. **Loki has no persistence.** Logs are in-memory and don't survive a restart — the one place the persistence fix didn't carry through.
-12. **No alerting.** Metrics are collected and graphed but no alerts setup. SLOs with burn-rate alerts would be next.
+1. **Branch protection is weakened**, so the deploy bot can push. Right fix: a separate config repo.
+2. **Migrations are manual.** A pod restarting against a fresh database won't tell you the schema's missing.
+3. Backups are automated; restore is still untested end to end.
+4. **Containers run as root.** No `USER` line, no read-only root filesystem.
+5. **No resource requests/limits, no HPA, no PodDisruptionBudget.**
+6. **No NetworkPolicies.** RDS's security group is scoped, but pod-to-pod traffic inside the cluster is flat.
+7. **Loki has no persistence.**
+8. **No alerting.**
+9. **IAM is broad, not least-privilege.** The applying user has `AdministratorAccess`; the IRSA roles are scoped tightly, the human-facing setup isn't.
+10. **EKS's public endpoint has no network-level restriction** — IAM/RBAC only, no IP allowlist, no private-only endpoint.
+11. **Single NAT gateway, single-AZ RDS.** Cost tradeoffs, both single points of failure.
 
 ---
 
