@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: 719129114745.dkr.ecr.us-east-1.amazonaws.com/conduit:e5ed44b601f48e39c285cb9fc15b746612261746
+          image: 719129114745.dkr.ecr.us-east-1.amazonaws.com/conduit:803bc908361e56b1cee195a6910b0a8986715c17
           ports:
             - containerPort: 3000
           envFrom:
