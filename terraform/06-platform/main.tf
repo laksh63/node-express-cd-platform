@@ -51,30 +51,35 @@ provider "aws" {
   region = var.region
 }
 
+locals {
+  tfstate_bucket = "node-express-cd-platform-tfstate-719129114745"
+  tfstate_region = "us-east-1"
+}
+
 data "terraform_remote_state" "cluster" {
   backend = "s3"
   config = {
-    bucket = "node-express-cd-platform-tfstate-719129114745"
+    bucket = local.tfstate_bucket
     key    = "cluster/terraform.tfstate"
-    region = "us-east-1"
+    region = local.tfstate_region
   }
 }
 
 data "terraform_remote_state" "database" {
   backend = "s3"
   config = {
-    bucket = "node-express-cd-platform-tfstate-719129114745"
+    bucket = local.tfstate_bucket
     key    = "database/terraform.tfstate"
-    region = "us-east-1"
+    region = local.tfstate_region
   }
 }
 
 data "terraform_remote_state" "secrets" {
   backend = "s3"
   config = {
-    bucket = "node-express-cd-platform-tfstate-719129114745"
+    bucket = local.tfstate_bucket
     key    = "secrets/terraform.tfstate"
-    region = "us-east-1"
+    region = local.tfstate_region
   }
 }
 
@@ -86,17 +91,23 @@ data "aws_eks_cluster_auth" "this" {
   name = data.terraform_remote_state.cluster.outputs.cluster_name
 }
 
+locals {
+  cluster_host  = data.aws_eks_cluster.this.endpoint
+  cluster_ca    = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
+  cluster_token = data.aws_eks_cluster_auth.this.token
+}
+
 provider "kubernetes" {
-  host                   = data.aws_eks_cluster.this.endpoint
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
-  token                  = data.aws_eks_cluster_auth.this.token
+  host                   = local.cluster_host
+  cluster_ca_certificate = local.cluster_ca
+  token                  = local.cluster_token
 }
 
 provider "helm" {
   kubernetes {
-    host                   = data.aws_eks_cluster.this.endpoint
-    cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
-    token                  = data.aws_eks_cluster_auth.this.token
+    host                   = local.cluster_host
+    cluster_ca_certificate = local.cluster_ca
+    token                  = local.cluster_token
   }
 }
 
@@ -188,11 +199,12 @@ resource "helm_release" "argocd" {
   })]
 }
 
-# Argo CD needs repo access before it can pull k8s/, so this secret can't
-# itself be a GitOps-managed manifest — Terraform creates it directly,
-# reading the PAT from Secrets Manager instead of a hand-run kubectl command.
 data "aws_secretsmanager_secret_version" "argocd_repo" {
   secret_id = data.terraform_remote_state.secrets.outputs.argocd_repo_secret_arn
+}
+
+locals {
+  argocd_repo_creds = sensitive(jsondecode(data.aws_secretsmanager_secret_version.argocd_repo.secret_string))
 }
 
 resource "kubernetes_secret" "repo_conduit" {
@@ -207,15 +219,13 @@ resource "kubernetes_secret" "repo_conduit" {
   data = {
     type     = "git"
     url      = var.github_repo_url
-    username = jsondecode(data.aws_secretsmanager_secret_version.argocd_repo.secret_string)["username"]
-    password = jsondecode(data.aws_secretsmanager_secret_version.argocd_repo.secret_string)["password"]
+    username = local.argocd_repo_creds["username"]
+    password = local.argocd_repo_creds["password"]
   }
 
   depends_on = [helm_release.argocd]
 }
 
-# External Secrets Operator — syncs api-credentials (see
-# k8s/external-secrets.yaml) from Secrets Manager into the cluster.
 resource "kubernetes_namespace" "external_secrets" {
   metadata {
     name = "external-secrets"
@@ -280,4 +290,23 @@ resource "helm_release" "external_secrets" {
       }
     }
   })]
+}
+
+resource "kubernetes_storage_class_v1" "gp3" {
+  metadata {
+    name = "gp3"
+    annotations = {
+      "storageclass.kubernetes.io/is-default-class" = "true"
+    }
+  }
+
+  storage_provisioner    = "ebs.csi.aws.com"
+  volume_binding_mode    = "WaitForFirstConsumer"
+  reclaim_policy         = "Delete"
+  allow_volume_expansion = true
+
+  parameters = {
+    type      = "gp3"
+    encrypted = "true"
+  }
 }
