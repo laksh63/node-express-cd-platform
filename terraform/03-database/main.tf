@@ -106,12 +106,12 @@ resource "aws_db_instance" "postgres" {
   db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [aws_security_group.rds.id]
   publicly_accessible    = false
-  multi_az                = false
+  multi_az               = false
 
   backup_retention_period = 7
   # Project/test account — no final snapshot needed for easy teardown.
   skip_final_snapshot = true
-  deletion_protection  = false
+  deletion_protection = false
 }
 
 output "db_endpoint" {
