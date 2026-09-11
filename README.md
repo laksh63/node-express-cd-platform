@@ -17,7 +17,8 @@ All eight requirements:
 - **Centralized logging** — Loki + Promtail.
 - **Backups** — RDS automated backups, 7-day retention, point-in-time recovery. Restore itself is untested — see gaps.
 
-Started on a local [kind](https://kind.sigs.k8s.io/) cluster before recieving the full details on submission, then moved to real AWS wasn't very time consuming since  — same manifests, same GitOps flow, different substrate.
+Started on a local [kind](https://kind.sigs.k8s.io/) cluster before the full submission details came through; once AWS was in scope, moving over wasn't much work — same manifests, same GitOps flow, different underlying infrastructure.
+
 
 ## Stack
 
