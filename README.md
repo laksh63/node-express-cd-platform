@@ -4,7 +4,7 @@ A continuous delivery platform for the [RealWorld](https://github.com/gothinkste
 
 The app itself is the upstream Node/Express + Prisma implementation. I only touched it where the platform needed something — a metrics endpoint, a health check, the Dockerfile. Everything else here is the platform.
 
-## What's covered
+## What's covered in the doc
 
 All eight requirements:
 
